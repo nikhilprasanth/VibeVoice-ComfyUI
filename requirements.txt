@@ -1,5 +1,5 @@
 accelerate>=1.6.0
-transformers>=4.51.3,<5.0.0
+transformers>=4.51.3
 diffusers
 tqdm
 scipy
