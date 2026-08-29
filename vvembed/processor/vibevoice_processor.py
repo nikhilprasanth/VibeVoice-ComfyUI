@@ -385,20 +385,28 @@ class VibeVoiceProcessor:
         # Build full token sequence
         full_tokens = system_tokens + voice_tokens
         speech_input_mask = [False] * len(system_tokens) + voice_speech_masks
-        
+
         # Add text input section
-        full_tokens += self.tokenizer.encode(' Text input:\n', add_special_tokens=False)
-        speech_input_mask += [False] * len(self.tokenizer.encode(' Text input:\n', add_special_tokens=False))
-        
+        text_input_tokens = self.tokenizer.encode(' Text input:\n', add_special_tokens=False)
+        full_tokens += text_input_tokens
+        speech_input_mask += [False] * len(text_input_tokens)
+
         for speaker_id, speaker_text in parsed_lines:
             speaker_text_tokens = self.tokenizer.encode(f" Speaker {speaker_id}:{speaker_text}\n", add_special_tokens=False)
             full_tokens += speaker_text_tokens
             speech_input_mask += [False] * len(speaker_text_tokens)
-        
+
         # Add speech output section
-        full_tokens += self.tokenizer.encode(' Speech output:\n', add_special_tokens=False) + [self.tokenizer.speech_start_id]
-        speech_input_mask += [False] * (len(self.tokenizer.encode(' Speech output:\n', add_special_tokens=False)) + 1)
-        
+        speech_output_tokens = self.tokenizer.encode(' Speech output:\n', add_special_tokens=False) + [self.tokenizer.speech_start_id]
+        full_tokens += speech_output_tokens
+        speech_input_mask += [False] * len(speech_output_tokens)
+
+        if len(full_tokens) != len(speech_input_mask):
+            raise RuntimeError(
+                "VibeVoice processor alignment error: "
+                f"input_ids={len(full_tokens)}, speech_input_mask={len(speech_input_mask)}"
+            )
+
         return {
             "input_ids": full_tokens,
             "speech_inputs": voice_speech_inputs if voice_speech_inputs else None,
@@ -420,7 +428,16 @@ class VibeVoiceProcessor:
         # Extract input_ids and create attention_mask
         input_ids_list = [enc["input_ids"] for enc in encodings]
         speech_input_masks_list = [enc["speech_input_mask"] for enc in encodings]
-        
+
+        # Defensive check: each sample's token sequence and speech mask must
+        # already be aligned before we pad/batch/tensorize them.
+        for i, (ids, mask) in enumerate(zip(input_ids_list, speech_input_masks_list)):
+            if len(ids) != len(mask):
+                raise RuntimeError(
+                    "VibeVoice batch encode alignment error at sample "
+                    f"{i}: input_ids={len(ids)}, speech_input_mask={len(mask)}"
+                )
+
         # Determine padding strategy
         if isinstance(padding, bool):
             padding_strategy = PaddingStrategy.LONGEST if padding else PaddingStrategy.DO_NOT_PAD
@@ -483,6 +500,20 @@ class VibeVoiceProcessor:
             if return_attention_mask and attention_masks is not None:
                 batch_encoding["attention_mask"] = torch.tensor(attention_masks, dtype=torch.long)
             batch_encoding["speech_input_mask"] = torch.tensor(speech_input_masks_list, dtype=torch.bool)
+
+            if batch_encoding["input_ids"].shape[1] != batch_encoding["speech_input_mask"].shape[1]:
+                raise RuntimeError(
+                    "VibeVoice batch encode alignment error: "
+                    f"input_ids shape={tuple(batch_encoding['input_ids'].shape)}, "
+                    f"speech_input_mask shape={tuple(batch_encoding['speech_input_mask'].shape)}"
+                )
+            if return_attention_mask and attention_masks is not None:
+                if batch_encoding["input_ids"].shape[1] != batch_encoding["attention_mask"].shape[1]:
+                    raise RuntimeError(
+                        "VibeVoice batch encode alignment error: "
+                        f"input_ids shape={tuple(batch_encoding['input_ids'].shape)}, "
+                        f"attention_mask shape={tuple(batch_encoding['attention_mask'].shape)}"
+                    )
         else:
             batch_encoding["input_ids"] = input_ids_list
             if return_attention_mask and attention_masks is not None:
@@ -543,23 +574,32 @@ class VibeVoiceProcessor:
             # else:
             vae_tok_len = math.ceil(wav.shape[0] / self.speech_tok_compress_ratio)
             
-            # Build tokens and masks
-            speaker_tokens = (prefix_tokens + 
-                            [self.tokenizer.speech_start_id] + 
-                            [vae_token_id] * vae_tok_len + 
-                            [self.tokenizer.speech_end_id] + 
-                            self.tokenizer.encode('\n', add_special_tokens=False))
-            
-            vae_input_mask = ([False] * len(prefix_tokens) + 
-                            [False] + 
-                            [True] * vae_tok_len + 
-                            [False] + 
-                            [False])
-            
+            # Build tokens and masks. Encode the trailing newline once and
+            # reuse its exact token count for the mask, instead of assuming
+            # it always tokenizes to a single token (tokenizer-dependent).
+            newline_tokens = self.tokenizer.encode('\n', add_special_tokens=False)
+            speaker_tokens = (prefix_tokens +
+                            [self.tokenizer.speech_start_id] +
+                            [vae_token_id] * vae_tok_len +
+                            [self.tokenizer.speech_end_id] +
+                            newline_tokens)
+
+            vae_input_mask = ([False] * len(prefix_tokens) +
+                            [False] +
+                            [True] * vae_tok_len +
+                            [False] +
+                            [False] * len(newline_tokens))
+
             voice_full_tokens.extend(speaker_tokens)
             voice_speech_masks.extend(vae_input_mask)
             voice_speech_inputs.append(wav)
-            
+
+        if len(voice_full_tokens) != len(voice_speech_masks):
+            raise RuntimeError(
+                "VibeVoice voice prompt alignment error: "
+                f"tokens={len(voice_full_tokens)}, mask={len(voice_speech_masks)}"
+            )
+
         return voice_full_tokens, voice_speech_inputs, voice_speech_masks
 
     def prepare_speech_inputs(

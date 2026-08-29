@@ -4,13 +4,27 @@ from typing import List, Optional, Union
 
 from transformers.utils import logging
 from transformers.models.qwen2.tokenization_qwen2 import Qwen2Tokenizer
+
+logger = logging.get_logger(__name__)
+
 try:
     from transformers.models.qwen2.tokenization_qwen2_fast import Qwen2TokenizerFast
 except ImportError:
-    # Transformers 5 folds the fast Qwen2 tokenizer into Qwen2Tokenizer.
+    # Some transformers releases (e.g. certain 5.x builds) no longer expose a
+    # standalone fast Qwen2 tokenizer module. Fall back to the slow tokenizer.
+    # This changes constructor semantics (e.g. no tokenizer_file loading) but
+    # produces the same token ids for a given string, so callers must not
+    # assume a fixed number of tokens for any fixed piece of text (see the
+    # dynamic mask-length handling in VibeVoiceProcessor._create_voice_prompt
+    # and ._process_single) — always derive mask lengths from len(encode(...)).
+    logger.warning(
+        "Qwen2TokenizerFast could not be imported from this transformers "
+        "installation (likely transformers>=5). Falling back to the slow "
+        "Qwen2Tokenizer implementation for VibeVoiceTextTokenizerFast. "
+        "Generation should still work, but if you hit tokenizer/mask "
+        "alignment errors please report your transformers version."
+    )
     Qwen2TokenizerFast = Qwen2Tokenizer
-
-logger = logging.get_logger(__name__)
 
 
 class VibeVoiceTextTokenizer(Qwen2Tokenizer):
