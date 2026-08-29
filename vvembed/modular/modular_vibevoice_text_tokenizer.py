@@ -46,8 +46,6 @@ class VibeVoiceTextTokenizer(Qwen2Tokenizer):
             The end of sequence token.
         pad_token (`str`, *optional*, defaults to `"<|endoftext|>"`):
             The token used for padding.
-        add_special_tokens (`bool`, *optional*, defaults to `True`):
-            Whether or not to add special tokens when encoding.
     """
 
     model_input_names = ["input_ids", "attention_mask"]
@@ -62,9 +60,18 @@ class VibeVoiceTextTokenizer(Qwen2Tokenizer):
         eos_token="<|endoftext|>",
         pad_token="<|endoftext|>",
         add_prefix_space=False,
-        add_special_tokens=True,
         **kwargs,
     ):
+        # Note: do not accept/forward an `add_special_tokens` constructor
+        # kwarg here. It is not a real PreTrainedTokenizer constructor
+        # parameter (special tokens are added via the `add_special_tokens()`
+        # *method*, called below in `_add_vibevoice_special_tokens`), and
+        # newer transformers releases (5.x) raise
+        # `AttributeError: add_special_tokens conflicts with the method
+        # add_special_tokens` if a kwarg with that name is passed through to
+        # PreTrainedTokenizerBase.__init__, since it collides with the
+        # existing `add_special_tokens` method name.
+        kwargs.pop("add_special_tokens", None)
         super().__init__(
             vocab_file=vocab_file,
             merges_file=merges_file,
@@ -74,7 +81,6 @@ class VibeVoiceTextTokenizer(Qwen2Tokenizer):
             eos_token=eos_token,
             pad_token=pad_token,
             add_prefix_space=add_prefix_space,
-            add_special_tokens=add_special_tokens,
             **kwargs,
         )
         

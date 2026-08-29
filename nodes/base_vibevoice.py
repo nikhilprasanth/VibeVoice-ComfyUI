@@ -1718,7 +1718,25 @@ class BaseVibeVoiceNode:
                     speech_tensors = output.speech_outputs
 
                     if isinstance(speech_tensors, list) and len(speech_tensors) > 0:
-                        audio_tensor = torch.cat(speech_tensors, dim=-1)
+                        # The model appends None for any batch item that reached
+                        # end-of-sequence without ever emitting a speech token
+                        # (e.g. a bad seed/text combination). Filter those out
+                        # instead of letting torch.cat crash with a cryptic
+                        # "expected Tensor ... but got NoneType" error.
+                        valid_tensors = [t for t in speech_tensors if t is not None]
+                        if not valid_tensors:
+                            raise Exception(
+                                "VibeVoice generated no audio for this text: the model reached "
+                                "end-of-sequence without producing any speech tokens. Try a "
+                                "different seed, rephrase or shorten this text/chunk, or lower "
+                                "max_words_per_chunk."
+                            )
+                        if len(valid_tensors) != len(speech_tensors):
+                            logger.warning(
+                                f"VibeVoice produced audio for only {len(valid_tensors)}/"
+                                f"{len(speech_tensors)} batch item(s); dropping the empty one(s)."
+                            )
+                        audio_tensor = torch.cat(valid_tensors, dim=-1)
                     else:
                         audio_tensor = speech_tensors
                     
