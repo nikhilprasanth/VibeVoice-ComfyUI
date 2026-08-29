@@ -320,6 +320,25 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
         if speech_tensors is not None and speech_masks is not None:
             acoustic_features, speech_embeds = self._process_speech_inputs(speech_tensors.to(self.dtype), speech_masks)
             if speech_input_mask is not None:
+                if speech_input_mask.shape[:2] != inputs_embeds.shape[:2]:
+                    raise RuntimeError(
+                        "VibeVoice speech_input_mask alignment error: speech_input_mask has "
+                        f"shape {tuple(speech_input_mask.shape)} but inputs_embeds (derived from "
+                        f"input_ids) has shape {tuple(inputs_embeds.shape[:2])}. This means the "
+                        "text tokenizer produced a different number of tokens than the processor "
+                        "expected when building the prompt (a tokenizer/version compatibility "
+                        "issue), not a model bug. Please report this along with your transformers "
+                        "version."
+                    )
+                num_mask_positions = int(speech_input_mask.sum().item())
+                if num_mask_positions != speech_embeds.shape[0]:
+                    raise RuntimeError(
+                        "VibeVoice speech_input_mask/speech_embeds count mismatch: the mask marks "
+                        f"{num_mask_positions} position(s) for speech embeddings, but "
+                        f"{speech_embeds.shape[0]} speech embedding(s) were produced. This "
+                        "indicates a mismatch between the voice prompt token layout and the "
+                        "processed voice sample(s)."
+                    )
                 inputs_embeds[speech_input_mask] = speech_embeds
 
         outputs = self.model(
